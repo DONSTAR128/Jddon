@@ -1,1 +1,198 @@
+import pandas as pd
+import itertools as it
+import statsmodels.formula.api as smf
+from statsmodels.formula.api import ols
 
+def forward(data, variate): #前进法
+    result = [] #储存最终结果的列表
+    cur_aic=float('inf') #每一次前进的当前AIC值
+
+    while True:
+        aic_variate = [] #用于同时输出AIC值和变量名的临时二维列表
+        for v in variate: #初始变量数为0，此循环每次加入一个新变量，并计算AIC值
+            cur_formula = "{}~{}".format("y","+".join(result+[v]))
+            aic = ols(formula = cur_formula,data = data).fit().aic
+            aic_variate.append((aic,v)) #结果加入二维数组
+
+        aic_variate.sort(reverse = True) #对AIC值从大到小排序，方便后续pop最小的AIC值和变量名
+        for a in aic_variate: #输出第一次前进结果
+            print("+",a)
+        best_aic,best_variate = aic_variate.pop() #将列表最后一个元素pop出，即当前最小最优的AIC值和变量名
+
+        if cur_aic > best_aic: #如果当前最小的AIC值比前一次最优的小，说明循环未结束，还能继续加入变量
+            variate.remove(best_variate) #移除当前最小的AIC值
+            result.append(best_variate) #将当前最小的AIC值移入最终结果列表
+            cur_aic = best_aic #令当前最小的AIC值作为下一次循环的AIC评判标准
+            print("The current best AIC of {} is {}".format(best_variate,cur_aic))
+            print("--------------Continuing--------------") #循环继续
+        else:
+            result.sort() #如果当前最小的AIC值比前一次最优的大，说明循环结束，没有比前一次更优的AIC值了
+            best_formula= "{}~{}".format("y","+".join(result)) #计算并输出result最终列表的变量AIC值
+            best_aic = ols(formula = best_formula,data = data).fit().aic
+            print(best_formula)
+            print("The best AIC is {}".format(best_aic))
+            print("---------------Complete---------------") #循环结束
+            break
+
+def backward(data, aic, variate): #后退法
+    result = [] #储存最终结果的列表
+    origin_variate = set(variate) #复制一份变量名元组，避免改变原数据
+    while True:
+        aic_variate = [] #用于同时输出AIC值和变量名的临时二维列表
+        aic_variate.append((aic,"<None>")) #加入初始AIC值，即用于比较的None
+        for v in variate.copy():
+            variate.remove("{}".format(v)) #此循环每次减去一个变量，并计算AIC值
+            cur_formula = "{}~{}".format("y","+".join(variate))
+            cur_aic = ols(formula = cur_formula,data = data).fit().aic
+            aic_variate.append((cur_aic,v)) #结果加入二维数组
+            variate = set(origin_variate)
+            
+        aic_variate.sort() #将AIC值从小到大排序
+        for a in aic_variate:
+            print("-",a)
+        if aic_variate[0] != (aic, "<None>"): #如果第一个元素不是"<None>"，移除AIC最小的最差元素
+            aic_variate.pop(0)
+        for a in aic_variate:
+            cur_aic, cur_variate = a
+            result.append(cur_variate) #剩余元素加入result列表继续下一次循环
+            
+        if "<None>" in result: #检查None是否在result，否则会影响下次循环
+            result.remove("<None>")
+        result.sort()
+        new_formula= "{}~{}".format("y","+".join(result))
+        cur_aic = ols(formula = new_formula,data = data).fit().aic
+
+        if aic_variate[0] != (cur_aic,"<None>"): #如果当前<None>值对应的AIC不是最小的，继续移除，否则循环结束
+            print(new_formula)
+            print("The current AIC is {}".format(cur_aic)) #输出当前AIC
+            print("--------------Continuing--------------")
+            new_variate = result
+            backward(data, cur_aic, new_variate) #递归
+        else:
+            print(new_formula)
+            print("The best AIC is {}".format(cur_aic)) #输出最优AIC
+            print("---------------Complete---------------") #循环结束
+        break
+
+def bothward(data, aic, variate): #逐步回归
+    stay = [] #待定前进或后退的列表
+    best_variate = '{}'.format("+".join(variate))
+    while True:
+        cur_aic = worst_aic = best_aic = aic
+        for v in variate.copy():#此循环每次减去一个变量，并计算AIC值，与上一次循环AIC值比较
+            cur_variate = best_variate.replace("+{}".format(v),"") #replace每次减去一个变量
+            cur_formula = "{}~{}".format("y","".join(cur_variate))
+            new_aic = ols(formula = cur_formula,data = data).fit().aic
+            print("-",(new_aic, v))
+            if new_aic < aic:
+                aic = worst_aic = new_aic
+                worst_Factors = v
+        
+        for s in stay: #将stay待定区的每一个变量前进并计算出AIC值，与上一次循环AIC值比较
+            cur_variate = '{}+{}'.format(best_variate,s) #每次加一个变量s
+            cur_formula = "{}~{}".format("y","".join(cur_variate))
+            new_aic = ols(formula = cur_formula,data = data).fit().aic
+            print("+",(new_aic, s))
+            if aic < new_aic:
+                aic = best_aic = new_aic
+                best_Factors = s
+                
+        if cur_aic == aic:#如果当前AIC值等于最小AIC值，则循环结束
+            best_formula = "{}~{}".format("y","".join(best_variate[3:]))
+            new_aic = ols(formula = best_formula,data = data).fit().aic
+            print(best_formula)
+            print("The best AIC is {}".format(new_aic))
+            print("---------------Complete---------------")
+            break
+        elif worst_aic <= best_aic: 
+            variate.remove(worst_Factors)
+            stay.append(worst_Factors) #后退的AIC值将其加入stay继续循环
+            best_variate = best_variate.replace("+{}".format(worst_Factors),"")
+        else:
+            variate.append(best_Factors)
+            stay.remove(best_Factors) #前进的AIC值将其退出stay不继续下一轮循环
+            best_variate += "+{}".format(best_Factors)
+        best_formula = "{}~{}".format("y","".join(best_variate))
+        print(best_formula)
+        print("The current AIC is {}".format(aic)) #输出当前AIC值
+        print("--------------Continuing--------------")
+
+
+def children(data, aic, variate):
+    new_variate = []
+    variate = sorted(variate)
+    for v in variate: #输出x1，x2，x3，x4，x5，x6，x7，x8，x9列标
+        print(v,"\t",end=" ")
+    print("AIC")
+    print()
+    
+    for i in range(1, len(variate)+1): #找出[x1，x2，x3，x4，x5，x6，x7，x8，x9]所有子集
+        iter1 = it.combinations(variate, i)
+        new_variate.append(list(iter1)) #加入new_variate
+    
+    while True:
+        aic_variate = []
+
+        for subset in new_variate: #循环所有子集
+            
+            for s in subset: #循环子集里的单个变量
+                
+                cur_formula = "{}~{}".format("y","+".join(s))
+                cur_aic = ols(formula = cur_formula,data = data).fit().aic
+                
+                for v in variate: #
+                    choose = []
+                    if v in s: #如果单个变量在子集里，用⚪标记
+                        choose.append('⚪')
+                    else:
+                        choose.append(' ')
+                    for c in choose: #输出该行
+                        print(c,'\t',end='')
+                print(cur_aic) #输出该行AIC值
+                print()
+                aic_variate.append((cur_aic, s))
+                
+            aic_variate.sort(reverse = True) #从大到小排序
+            
+        best_aic,best_variate = aic_variate.pop() #pop出最后一个，即最好的
+        
+        if origin_aic > best_aic: #如果最好的小于全变量AIC值，则结束并输出
+            best_formula = "{}~{}".format("y","+".join(best_variate))
+            print(best_formula)
+            print("The best AIC is {}".format(best_aic))
+            print("---------------Complete---------------")
+            break
+
+
+def start(data):
+    global variate_name,origin_aic #全局变量名variate_name=['x1','x2','x3','x4','x5','x6','x7','x8','x9']和初始AIC
+    variate_name = set(data.columns)
+    variate_name.remove("y")
+    variate_name = sorted(variate_name)
+    variate_name_for = set(variate_name) #分别复制四份一样的变量对应四种方法，避免改变原数据
+    variate_name_back = set(variate_name)
+    variate_name_both = set(variate_name)
+    variate_name_child = set(variate_name)
+    
+    formula = "{}~{}".format("y","+".join(variate_name)) #y~x1+x2+x3+x4+x5+x6+x7+x8+x9
+    origin_aic = ols(formula = formula,data = data).fit().aic #初始AIC=465.70666688710406
+    
+    print("----------------前进法----------------")
+    forward(data, variate_name_for)
+    
+    print("----------------后退法----------------")
+    print(formula)
+    print("The original AIC is {}".format(origin_aic))
+    backward(data, origin_aic, variate_name_back)
+    
+    print("----------------逐步法----------------")
+    print(formula)
+    print("The original AIC is {}".format(origin_aic))
+    bothward(data, origin_aic, variate_name_both)
+
+    print("---------------子集回归---------------")
+    children(data, origin_aic, variate_name_child)
+    
+data = pd.read_csv(r'C:\Users\11959\Desktop\data3.1.csv',encoding='gbk')
+data = data.iloc[:,1:] #第一列城市不读入
+start(data)
